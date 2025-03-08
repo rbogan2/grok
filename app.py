@@ -142,6 +142,82 @@ DEFAULT_HEADERS = {
     'Baggage': 'sentry-public_key=b311e0f2690c81f25e2c4cf6d4f7ce1c'
 }
 
+CFPASS_SERVER = os.environ.get("CFPASS_SERVER") or None
+#CFPASS_SERVER="http://localhost:8000/haha/cookies?url=https://grok.com"
+
+
+def get_cf_clearance(timeout=60):
+    # 检查CFPASS_SERVER是否存在
+    if not CFPASS_SERVER:
+        return None
+
+    try:
+        # 设置10秒超时，向CFPASS_SERVER发送GET请求
+        response = requests.get(CFPASS_SERVER, timeout=timeout)
+        # 检查响应状态，如果失败则抛出异常
+        response.raise_for_status()
+
+        # 解析JSON响应
+        data = response.json()
+
+        # 从cookies中提取cf_clearance值
+        cf_clearance = data.get("cookies", {}).get("cf_clearance")
+
+        if cf_clearance:
+            # 如果获取到cf_clearance，将其保存到cf_clearance.txt文件
+            with open("cf_clearance.txt", "w") as f:
+                f.write(cf_clearance)
+            CONFIG["SERVER"]['CF_CLEARANCE'] = cf_clearance
+            return cf_clearance
+        # 如果没有找到cf_clearance，返回None
+        return None
+
+    except requests.Timeout:
+        # 处理请求超时的异常
+        print("请求CFPASS_SERVER超时")
+        return None
+    except requests.RequestException as e:
+        # 处理其他请求相关的异常
+        print(f"获取cf_clearance时出错: {str(e)}")
+        return None
+    except json.JSONDecodeError:
+        # 处理JSON解析错误的异常
+        print("CFPASS_SERVER返回的JSON格式无效")
+        return None
+
+def check_cf_clearance_file():
+    try:
+        # 尝试打开并读取cf_clearance.txt文件
+        with open('cf_clearance.txt', 'r') as file:
+            # 读取文件内容并去除首尾空白字符
+            content = file.read().strip()
+            # 检查文件是否为空
+            if not content:  # 如果文件为空
+                # 调用get_cf_clearance()函数尝试获取clearance
+                if get_cf_clearance():  # 假设get_cf_clearance()已定义且返回布尔值
+                    # 如果成功获取clearance
+                    print("cf_clearance.txt为空，成功获取cf_clearance并保存")
+                    return True
+                else:
+                    # 如果获取clearance失败
+                    print("cf_clearance.txt为空，无法获取cf_clearance，请更换ip")
+                    return False
+            else:
+                # 如果文件不为空
+                print("cf_clearance.txt包含数据")
+                return True
+    except FileNotFoundError:
+        # 处理文件不存在的情况
+        # 尝试获取clearance
+        if get_cf_clearance():
+            # 如果成功创建并获取clearance
+            print("cf_clearance.txt不存在，已成功获取cf_clearance并保存")
+            return True
+        else:
+            # 如果获取失败
+            print("cf_clearance.txt不存在，无法获取cf_clearance，请更换ip")
+            return False
+
 class AuthTokenManager:
     def __init__(self):
         self.token_model_map = {}
@@ -1191,7 +1267,10 @@ def chat_completions():
                     token_manager.reduce_token_request_count(model,1)#重置去除当前因为错误未成功请求的次数，确保不会因为错误未成功请求的次数导致次数上限
                     if token_manager.get_token_count_for_model(model) == 0:
                         raise ValueError(f"{model} 次数已达上限，请切换其他模型或者重新对话")
-                    raise ValueError(f"IP暂时被封无法破盾，请稍后重试或者更换ip")
+                    if get_cf_clearance():
+                        raise ValueError(f"出盾了，请稍后重试或者更换ip，成功获取cf_clearance")
+                    else:
+                        raise ValueError(f"出盾了，IP暂时被封无法破盾，请稍后重试或者更换ip，无法获取cf_clearance")
                 elif response.status_code == 429:
                     response_status_code = 429
                     token_manager.reduce_token_request_count(model,1)
@@ -1219,7 +1298,10 @@ def chat_completions():
                     raise
                 continue
         if response_status_code == 403:
-            raise ValueError('IP暂时被封无法破盾，请稍后重试或者更换ip')
+            if get_cf_clearance():
+                raise ValueError(f"出盾了，成功获取cf_clearance，请稍后重试")
+            else:
+                raise ValueError(f"出盾了，IP暂时被封无法破盾，无法获取cf_clearance，请更换ip")
         elif response_status_code == 500:
             raise ValueError('当前模型所有令牌暂无可用，请稍后重试')    
 
@@ -1237,6 +1319,12 @@ def catch_all(path):
     return 'api运行正常', 200
 
 if __name__ == '__main__':
+    if not CFPASS_SERVER:
+        print("未配置CFPASS_SERVER地址")
+        exit()  # 结束程序
+    # 检测cf_clearance.txt是否为空
+    if not check_cf_clearance_file():
+        exit()  # 结束程序
     token_manager = AuthTokenManager()
     initialization()
 
