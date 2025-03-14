@@ -7,7 +7,7 @@ import sys
 import inspect
 import secrets
 from loguru import logger
-
+from urllib.parse import urlparse
 import requests
 from flask import Flask, request, Response, jsonify, stream_with_context, render_template, redirect, session
 from curl_cffi import requests as curl_requests
@@ -143,47 +143,169 @@ DEFAULT_HEADERS = {
 }
 
 CFPASS_SERVER = os.environ.get("CFPASS_SERVER") or None
-#CFPASS_SERVER="http://localhost:8000/haha/cookies?url=https://grok.com"
 
 
-def get_cf_clearance(timeout=60):
+def create_task(url, user_agent=None):
+    """
+    创建 Cloudflare 挑战任务。
+
+    参数:
+        url (str): 需要解决 Cloudflare 挑战的 URL。
+        user_agent (str, 可选): 用户代理字符串，未提供时从环境变量 UA 获取。
+
+    返回:
+        str 或 None: 成功时返回任务 ID，失败时返回 None。
+    """
+    # 从环境变量获取配置
+    cfp_server = os.environ.get('CFPASS_SERVER')
+    client_key = os.environ.get('CLIENT_KEY')
+    proxy_url = os.environ.get('PROXY')
+    default_ua = os.environ.get('UA',
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+
+    # 检查环境变量是否设置
+    if not cfp_server:
+        raise ValueError("环境变量 CFPASS_SERVER 未设置")
+    if not client_key:
+        raise ValueError("环境变量 CLIENT_KEY 未设置")
+    if not proxy_url:
+        raise ValueError("环境变量 PROXY 未设置")
+
+    # 解析代理 URL
+    parsed_proxy = urlparse(proxy_url)
+    proxy_scheme = parsed_proxy.scheme
+    proxy_host = parsed_proxy.hostname
+    proxy_port = parsed_proxy.port
+    proxy_username = parsed_proxy.username
+    proxy_password = parsed_proxy.password
+
+    # 如果未提供 user_agent，则使用默认值
+    if user_agent is None:
+        user_agent = default_ua
+
+    # 构造任务创建 URL
+    url_create_task = f"{cfp_server}/createTask"
+    headers = {"Content-Type": "application/json"}
+
+    # 定义任务数据
+    task_data = {
+        "clientKey": client_key,
+        "type": "CloudflareChallenge",
+        "url": url,
+        "userAgent": user_agent,
+        "proxy": {
+            "scheme": proxy_scheme,
+            "host": proxy_host,
+            "port": proxy_port,
+            "username": proxy_username,
+            "password": proxy_password
+        }
+    }
+
+    # 发送 POST 请求创建任务
+    response = requests.post(url_create_task, headers=headers, json=task_data)
+
+    if response.status_code == 200:
+        try:
+            task_response = response.json()
+            task_id = task_response.get("taskId")
+            return task_id
+        except json.JSONDecodeError:
+            print("无法解析响应内容。")
+    else:
+        print(f"创建任务失败。状态码: {response.status_code}")
+    return None
+
+
+def get_task_result(task_id, interval=5, maxretry=5):
+    """
+    获取任务结果。
+
+    参数:
+        task_id (str): 任务 ID。
+        interval (int): 重试间隔时间（秒），默认为 5。
+        maxretry (int): 最大重试次数，默认为 5。
+
+    返回:
+        str 或 None: 成功时返回任务结果，失败时返回 None。
+    """
+    # 从环境变量获取配置
+    cfp_server = os.environ.get('CFPASS_SERVER')
+    client_key = os.environ.get('CLIENT_KEY')
+
+    # 检查环境变量是否设置
+    if not cfp_server:
+        raise ValueError("环境变量 CFPASS_SERVER 未设置")
+    if not client_key:
+        raise ValueError("环境变量 CLIENT_KEY 未设置")
+
+    # 构造获取结果 URL
+    url_get_task_result = f"{cfp_server}/getTaskResult"
+    headers = {"Content-Type": "application/json"}
+    result_data = {
+        "clientKey": client_key,
+        "taskId": task_id
+    }
+
+    retry = 0
+    while retry <= maxretry:
+        response = requests.post(url_get_task_result, headers=headers, json=result_data)
+        if response.status_code == 200:
+            try:
+                result_response = response.json()
+                if result_response.get("status") == "completed":
+                    return result_response.get("result").get("response")
+                else:
+                    print(f"任务尚未完成。当前状态: {result_response.get('status')}")
+            except json.JSONDecodeError:
+                print("无法解析响应内容。")
+        else:
+            print(f"获取任务结果失败。状态码: {response.status_code}")
+        time.sleep(interval)
+        retry += 1
+        if retry > maxretry:
+            print("达到最大重试次数")
+            return None
+    return None
+
+
+def get_cf_clearanc(url, user_agent=None):
+    """
+    获取 Cloudflare 清除结果。
+
+    参数:
+        url (str): 需要解决 Cloudflare 挑战的 URL。
+        user_agent (str, 可选): 用户代理字符串，未提供时从环境变量 UA 获取。
+
+    返回:
+        str 或 None: 成功时返回清除结果，失败时返回 None。
+    """
+    task_id = create_task(url, user_agent)
+    if task_id:
+        print(f"任务创建成功，任务 ID: {task_id}")
+        task_result = get_task_result(task_id)
+        if task_result:
+            print("cf_clearanc:", task_result)
+        return task_result
+    return None
+
+def save_cf_clearance(timeout=60):
     # 检查CFPASS_SERVER是否存在
     if not CFPASS_SERVER:
         return None
 
-    try:
-        # 设置10秒超时，向CFPASS_SERVER发送GET请求
-        response = requests.get(CFPASS_SERVER, timeout=timeout)
-        # 检查响应状态，如果失败则抛出异常
-        response.raise_for_status()
+    # cf_clearance值
+    cf_clearance = get_cf_clearanc(url="grok.com")
 
-        # 解析JSON响应
-        data = response.json()
+    if cf_clearance:
+        # 如果获取到cf_clearance，将其保存到cf_clearance.txt文件
+        with open("cf_clearance.txt", "w") as f:
+            f.write(cf_clearance)
+        CONFIG["SERVER"]['CF_CLEARANCE'] = cf_clearance
+        return cf_clearance
+    # 如果没有找到cf_clearance，返回None
+    return None
 
-        # 从cookies中提取cf_clearance值
-        cf_clearance = data.get("cookies", {}).get("cf_clearance")
-
-        if cf_clearance:
-            # 如果获取到cf_clearance，将其保存到cf_clearance.txt文件
-            with open("cf_clearance.txt", "w") as f:
-                f.write(cf_clearance)
-            CONFIG["SERVER"]['CF_CLEARANCE'] = cf_clearance
-            return cf_clearance
-        # 如果没有找到cf_clearance，返回None
-        return None
-
-    except requests.Timeout:
-        # 处理请求超时的异常
-        print("请求CFPASS_SERVER超时")
-        return None
-    except requests.RequestException as e:
-        # 处理其他请求相关的异常
-        print(f"获取cf_clearance时出错: {str(e)}")
-        return None
-    except json.JSONDecodeError:
-        # 处理JSON解析错误的异常
-        print("CFPASS_SERVER返回的JSON格式无效")
-        return None
 
 def check_cf_clearance_file():
     try:
@@ -193,9 +315,11 @@ def check_cf_clearance_file():
             content = file.read().strip()
             # 检查文件是否为空
             if not content:  # 如果文件为空
-                # 调用get_cf_clearance()函数尝试获取clearance
-                if get_cf_clearance():  # 假设get_cf_clearance()已定义且返回布尔值
+                # 调用save_cf_clearance()函数尝试获取clearance
+                cf_clearance = save_cf_clearance()
+                if cf_clearance:  # 假设save_cf_clearance()已定义且返回布尔值
                     # 如果成功获取clearance
+                    CONFIG["SERVER"]['CF_CLEARANCE'] = cf_clearance
                     print("cf_clearance.txt为空，成功获取cf_clearance并保存")
                     return True
                 else:
@@ -209,7 +333,8 @@ def check_cf_clearance_file():
     except FileNotFoundError:
         # 处理文件不存在的情况
         # 尝试获取clearance
-        if get_cf_clearance():
+        cf_clearance = save_cf_clearance()
+        if cf_clearance:
             # 如果成功创建并获取clearance
             print("cf_clearance.txt不存在，已成功获取cf_clearance并保存")
             return True
@@ -1267,7 +1392,7 @@ def chat_completions():
                     token_manager.reduce_token_request_count(model,1)#重置去除当前因为错误未成功请求的次数，确保不会因为错误未成功请求的次数导致次数上限
                     if token_manager.get_token_count_for_model(model) == 0:
                         raise ValueError(f"{model} 次数已达上限，请切换其他模型或者重新对话")
-                    if get_cf_clearance():
+                    if save_cf_clearance():
                         raise ValueError(f"出盾了，请稍后重试或者更换ip，成功获取cf_clearance")
                     else:
                         raise ValueError(f"出盾了，IP暂时被封无法破盾，请稍后重试或者更换ip，无法获取cf_clearance")
@@ -1298,7 +1423,7 @@ def chat_completions():
                     raise
                 continue
         if response_status_code == 403:
-            if get_cf_clearance():
+            if save_cf_clearance():
                 raise ValueError(f"出盾了，成功获取cf_clearance，请稍后重试")
             else:
                 raise ValueError(f"出盾了，IP暂时被封无法破盾，无法获取cf_clearance，请更换ip")
