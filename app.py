@@ -1155,7 +1155,9 @@ def handle_stream_response(response, model):
     return generate()
 
 def initialization():
-    sso_array = os.environ.get("SSO", "").split(',')
+    # 打开sso.txt文件，读取每一行的SSO信息
+    with open('sso.txt', 'r') as file:
+        sso_array = [line.strip() for line in file if line.strip()]
     logger.info("开始加载令牌", "Server")
     for sso in sso_array:
         if sso:
