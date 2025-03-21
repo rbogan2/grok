@@ -90,6 +90,7 @@ CONFIG = {
         "grok-3-search": "grok-3",
         "grok-3-imageGen": "grok-3",
         "grok-3-deepsearch": "grok-3",
+        "grok-3-DeeperSearch": "grok-3",
         "grok-3-reasoning": "grok-3"
     },
     "API": {
@@ -359,6 +360,10 @@ class AuthTokenManager:
                 "ExpirationTime": 2 * 60 * 60 * 1000  # 2小时
             },
             "grok-3-deepsearch": {
+                "RequestFrequency": 10,
+                "ExpirationTime": 24 * 60 * 60 * 1000  # 24小时
+            },
+            "grok-3-DeeperSearch": {
                 "RequestFrequency": 10,
                 "ExpirationTime": 24 * 60 * 60 * 1000  # 24小时
             },
@@ -893,7 +898,7 @@ class GrokApiClient:
             "isPreset": False,
             "sendFinalMetadata": True,
             "customInstructions": "",
-            "deepsearchPreset": "default" if request["model"] == 'grok-3-deepsearch' else "",
+            "deepsearchPreset": "default" if request["model"] == 'grok-3-deepsearch' else "deeper" if request["model"] == 'grok-3-DeeperSearch' else "",
             "isReasoning": request["model"] == 'grok-3-reasoning'
         }
 
@@ -949,7 +954,7 @@ def process_model_response(response, model):
             result["token"] = response.get("token")
     elif model == 'grok-3':
         result["token"] = response.get("token")
-    elif model == 'grok-3-deepsearch':
+    elif model == 'grok-3-deepsearch' or  model == 'grok-3-DeeperSearch':
         if response.get("messageStepId") and not CONFIG["SHOW_THINKING"]:
             return result
         if response.get("messageStepId") and not CONFIG["IS_THINKING"]:
