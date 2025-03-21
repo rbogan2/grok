@@ -288,7 +288,7 @@ def get_cf_clearanc(url, user_agent=None):
         if task_result:
             print("cf_clearanc:", task_result)
         return task_result
-    return None
+    return ""
 
 def save_cf_clearance(timeout=60):
     # 检查CFPASS_SERVER是否存在
@@ -341,6 +341,7 @@ def check_cf_clearance_file():
             return True
         else:
             # 如果获取失败
+            CONFIG["SERVER"]['CF_CLEARANCE'] = ""
             print("cf_clearance.txt不存在，无法获取cf_clearance，请更换ip")
             return False
 
@@ -1455,8 +1456,7 @@ if __name__ == '__main__':
         print("未配置CFPASS_SERVER地址")
         exit()  # 结束程序
     # 检测cf_clearance.txt是否为空
-    if not check_cf_clearance_file():
-        exit()  # 结束程序
+    check_cf_clearance_file()
     token_manager = AuthTokenManager()
     initialization()
 
