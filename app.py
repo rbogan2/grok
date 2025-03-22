@@ -163,6 +163,7 @@ def create_task(url, user_agent=None):
     proxy_url = os.environ.get('PROXY')
     default_ua = os.environ.get('UA',
                                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+    cf_type = os.environ.get('CF_TYPE',"CloudflareChallenge")
 
     # 检查环境变量是否设置
     if not cfp_server:
@@ -191,7 +192,7 @@ def create_task(url, user_agent=None):
     # 定义任务数据
     task_data = {
         "clientKey": client_key,
-        "type": "CloudflareChallenge",
+        "type": cf_type,
         "url": url,
         "userAgent": user_agent,
         "proxy": {
